@@ -37,6 +37,9 @@ def build_client() -> AsyncOpenAI | None:
 
 client = build_client()
 
+INTERACTION_TYPE_OPTIONS = ('meeting', 'detail_visit', 'call', 'follow_up')
+SENTIMENT_OPTIONS = ('positive', 'neutral', 'negative')
+
 
 def _format_today() -> str:
     return date.today().isoformat()
@@ -249,6 +252,48 @@ def _compose_assistant_response(summary: str, next_steps: list[str]) -> str:
     return f'📝 Summary\n{summary}\n\n✨ Next steps\n{steps_block}'
 
 
+def _is_missing_value(value: object) -> bool:
+    return value is None or value == ''
+
+
+def _normalize_option_index(value: object, options: tuple[str, ...]) -> int | None:
+    if isinstance(value, int) and 0 <= value < len(options):
+        return value
+
+    if isinstance(value, str) and value.strip().isdigit():
+        numeric_value = int(value.strip())
+        if 0 <= numeric_value < len(options):
+            return numeric_value
+
+    if isinstance(value, str):
+        normalized = re.sub(r'[\s\-]+', '_', value.strip().lower())
+        for index, option in enumerate(options):
+            if normalized == option:
+                return index
+
+    return None
+
+
+def _build_form_values(extracted_data: dict | None = None) -> dict:
+    extracted = extracted_data or {}
+    interaction_type_value = extracted.get('interaction_type_index', extracted.get('interaction_type'))
+    sentiment_value = extracted.get('sentiment_index', extracted.get('sentiment'))
+
+    return {
+        'hcp_name': extracted.get('hcp_name') or '',
+        'interaction_type_index': _normalize_option_index(interaction_type_value, INTERACTION_TYPE_OPTIONS),
+        'date': extracted.get('date') or '',
+        'time': extracted.get('time') or '',
+        'attendees': extracted.get('attendees') or '',
+        'topics_discussed': extracted.get('topics_discussed') or '',
+        'materials_shared': extracted.get('materials_shared') or '',
+        'samples_distributed': extracted.get('samples_distributed') or '',
+        'sentiment_index': _normalize_option_index(sentiment_value, SENTIMENT_OPTIONS),
+        'outcomes': extracted.get('outcomes') or '',
+        'follow_up_actions': extracted.get('follow_up_actions') or '',
+    }
+
+
 def build_local_payload(text: str, assistant_response: str | None = None) -> dict:
     payload = _extract_interaction_data(text)
     next_steps = _build_next_steps(payload['extracted_data'], text)
@@ -364,16 +409,26 @@ def _extract_interaction_data(text: str) -> dict:
         'is_follow_up_only': is_follow_up_only,
     }
 
-def fallback_response(text: str) -> dict:
-    extracted = build_local_payload(text)
-    extracted['assistant_response'] = 'I could not reach the model, so I filled the draft using local parsing.'
-    extracted['assistant_response'] = _compose_assistant_response(extracted['assistant_response'], extracted.get('next_steps', []))
-    return extracted
+def fallback_response(text: str, current_form_values: dict | None = None) -> dict:
+    extracted = _extract_interaction_data(text)
+    current_form_values = current_form_values or {}
+    current_form_values_normalized = _build_form_values(current_form_values)
+    local_form_values = _build_form_values(extracted['extracted_data'])
+
+    merged_form_values = {
+        key: value if not _is_missing_value(value) else current_form_values_normalized.get(key) or local_form_values.get(key)
+        for key, value in {**current_form_values_normalized, **local_form_values}.items()
+    }
+
+    return {
+        'response': 'I could not reach the model, so I filled the form using local parsing.',
+        'form_values': merged_form_values,
+    }
 
 
 async def stream_assistant_summary(text: str) -> AsyncGenerator[str, None]:
     if client is None:
-        yield fallback_response(text)['assistant_response']
+        yield fallback_response(text)['response']
         return
 
     prompt = f"""
@@ -405,24 +460,83 @@ User note:
         yield fallback_response(text)['assistant_response']
 
 
-async def extract_entities_from_text(text: str) -> dict:
+async def extract_entities_from_text(text: str, current_form_values: dict | None = None) -> dict:
     """Call the configured LLM provider to extract and summarize an HCP interaction."""
     if client is None:
-        return fallback_response(text)
+        return fallback_response(text, current_form_values)
+
+    current_form_values = current_form_values or {}
+    current_form_values_json = json.dumps(_build_form_values(current_form_values), ensure_ascii=False)
 
     prompt = f"""
 You are an assistant for logging HCP interactions in a CRM.
 
-Return JSON only with these keys:
-- assistant_response: a short, friendly acknowledgement and summary for the user
-- extracted_data: object with hcp_name, interaction_type, date, time, attendees, topics_discussed, materials_shared, samples_distributed, sentiment, outcomes, follow_up_actions
-- confidence: object with confidence values between 0 and 1 for the important fields
-- requires_confirmation: boolean
+Return exactly one valid JSON object and nothing else.
+Do not wrap the output in markdown. Do not include explanations.
+
+The JSON must contain exactly these top-level keys:
+- response: a short, friendly assistant reply
+- form_values: an object containing the form field values
+
+For dropdown or radio fields, return the zero-based option index, not the label.
+
+Use these option indexes:
+
+interaction_type_index
+0 = meeting
+1 = detail_visit
+2 = call
+3 = follow_up
+
+sentiment_index
+0 = positive
+1 = neutral
+2 = negative
+
+form_values keys:
+- hcp_name: string
+- interaction_type_index: number or null
+- date: string in YYYY-MM-DD or empty string
+- time: string in HH:MM 24-hour format or empty string
+- attendees: string
+- topics_discussed: string
+- materials_shared: string
+- samples_distributed: string
+- sentiment_index: number or null
+- outcomes: string
+- follow_up_actions: string
 
 Rules:
-- If a field is not present in the note, use null.
-- Use YYYY-MM-DD for date when possible.
-- Keep assistant_response concise.
+- Only include values you can infer from the user note.
+- Use empty strings for missing text fields.
+- Use null for unknown dropdown indexes.
+- Treat the existing form values below as previous data points.
+- If the new user note does not clearly change a field, keep the existing value.
+- If the new user note contradicts a previous value, update the field to match the new note.
+- You may add new fields only when the user note provides additional information.
+- Preserve useful existing details even if the new note is partial.
+- Keep response concise and helpful.
+
+Example shape:
+{{
+    "response": "I filled the form with the details I could extract.",
+    "form_values": {{
+        "hcp_name": "Dr. Smith",
+        "interaction_type_index": 1,
+        "date": "2026-05-22",
+        "time": "14:30",
+        "attendees": "John Doe, Mary Lee",
+        "topics_discussed": "Discussed product efficacy and patient outcomes.",
+        "materials_shared": "Brochure",
+        "samples_distributed": "2 sample kits",
+        "sentiment_index": 0,
+        "outcomes": "Agreed to follow up next week.",
+        "follow_up_actions": "Schedule follow-up call on Friday."
+    }}
+}}
+    Existing form values:
+    {current_form_values_json}
+
 
 User note:
 {text}
@@ -436,27 +550,34 @@ User note:
             max_tokens=512,
         )
     except Exception:
-        return fallback_response(text)
+        return fallback_response(text, current_form_values)
 
     content = resp.choices[0].message.content or '{}'
     try:
         parsed = json.loads(content)
         local_data = _extract_interaction_data(text)
-        extracted_data = parsed.get('extracted_data') if isinstance(parsed.get('extracted_data'), dict) else {}
+        parsed_form_values = parsed.get('form_values') if isinstance(parsed.get('form_values'), dict) else {}
 
-        merged_data = extracted_data | local_data['extracted_data']
-        merged_data = {
-            key: value if value not in (None, '') else local_data['extracted_data'].get(key)
-            for key, value in merged_data.items()
-        }
+        existing_form_values = _build_form_values(current_form_values)
+        local_form_values = _build_form_values(local_data['extracted_data'])
+        normalized_form_values = _build_form_values(parsed_form_values)
+
+        merged_form_values = existing_form_values.copy()
+        for key, value in local_form_values.items():
+            if not _is_missing_value(value):
+                merged_form_values[key] = value
+
+        for key, value in normalized_form_values.items():
+            if not _is_missing_value(value):
+                merged_form_values[key] = value
+
+        for key, value in existing_form_values.items():
+            if _is_missing_value(merged_form_values.get(key)) and not _is_missing_value(value):
+                merged_form_values[key] = value
 
         return {
-            'assistant_response': parsed.get('assistant_response') or local_data['assistant_response'],
-            'extracted_data': merged_data,
-            'confidence': local_data['confidence'] | (parsed.get('confidence') if isinstance(parsed.get('confidence'), dict) else {}),
-            'requires_confirmation': parsed.get('requires_confirmation', True),
-            'next_steps': local_data.get('next_steps', []),
-            'is_follow_up_only': local_data.get('is_follow_up_only', False),
+            'response': parsed.get('response') or local_data['assistant_response'],
+            'form_values': merged_form_values,
         }
     except Exception:
-        return fallback_response(text)
+        return fallback_response(text, current_form_values)

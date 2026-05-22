@@ -17,6 +17,7 @@ router = APIRouter()
 class AIChatIn(BaseModel):
     session_id: str
     message: str
+    current_form_values: dict | None = None
 
 
 class ConfirmIn(BaseModel):
@@ -28,7 +29,7 @@ class ConfirmIn(BaseModel):
 @router.post('/api/v1/ai/chat')
 async def ai_chat(payload: AIChatIn):
     # Call LLM or fallback extraction
-    result = await extract_entities_from_text(payload.message)
+    result = await extract_entities_from_text(payload.message, payload.current_form_values)
     return result
 
 

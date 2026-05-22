@@ -8,12 +8,10 @@ type AiMessage = {
   body: string
 }
 
-type StreamEvent =
-  | { type: 'delta'; content: string }
-  | { type: 'final'; payload: any }
-
 const today = new Date().toISOString().split('T')[0]
 const introMessageId = 'assistant-intro'
+const interactionTypeOptions = ['meeting', 'detail_visit', 'call', 'follow_up'] as const
+const sentimentOptions = ['positive', 'neutral', 'negative'] as const
 
 const emptyDraft: InteractionDraft = {
   hcp_name: '',
@@ -29,20 +27,44 @@ const emptyDraft: InteractionDraft = {
   follow_up_actions: '',
 }
 
-function normalizeExtraction(payload: any): Partial<InteractionDraft> {
-  const extracted = payload?.extracted_data ?? payload?.extracted ?? payload ?? {}
+function normalizeOptionValue(value: unknown, options: readonly string[], fallback: string) {
+  if (typeof value === 'number' && options[value]) {
+    return options[value]
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_')
+    const matchIndex = options.findIndex((option) => option === normalized)
+    if (matchIndex >= 0) {
+      return options[matchIndex]
+    }
+  }
+
+  return fallback
+}
+
+function normalizeResponseFormValues(payload: any, current: InteractionDraft): Partial<InteractionDraft> {
+  const extracted = payload?.form_values ?? payload?.extracted_data ?? payload?.extracted ?? payload ?? {}
 
   const nextDraft: Partial<InteractionDraft> = {}
 
   if (extracted.hcp_name) nextDraft.hcp_name = extracted.hcp_name
-  if (extracted.interaction_type) nextDraft.interaction_type = extracted.interaction_type
+  nextDraft.interaction_type = normalizeOptionValue(
+    extracted.interaction_type_index ?? extracted.interaction_type,
+    interactionTypeOptions,
+    current.interaction_type,
+  )
   if (extracted.date) nextDraft.date = extracted.date
   if (extracted.time) nextDraft.time = extracted.time
   if (extracted.attendees) nextDraft.attendees = extracted.attendees
   if (extracted.topics_discussed) nextDraft.topics_discussed = extracted.topics_discussed
   if (extracted.materials_shared) nextDraft.materials_shared = extracted.materials_shared
   if (extracted.samples_distributed) nextDraft.samples_distributed = extracted.samples_distributed
-  if (extracted.sentiment) nextDraft.sentiment = extracted.sentiment
+  nextDraft.sentiment = normalizeOptionValue(
+    extracted.sentiment_index ?? extracted.sentiment,
+    sentimentOptions,
+    current.sentiment,
+  )
   if (extracted.outcomes) nextDraft.outcomes = extracted.outcomes
   if (extracted.follow_up_actions) nextDraft.follow_up_actions = extracted.follow_up_actions
 
@@ -101,133 +123,43 @@ export default function LogInteractionPage() {
     })
 
     try {
-      const res = await fetch('/api/v1/ai/chat/stream', {
+      const res = await fetch('/api/v1/ai/chat', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ session_id: 'local', message: message.trim() }),
+        body: JSON.stringify({
+          session_id: 'local',
+          message: message.trim(),
+          current_form_values: draft,
+        }),
       })
 
-      if (!res.ok || !res.body) {
-        throw new Error('Stream unavailable')
+      if (!res.ok) {
+        throw new Error('Request failed')
       }
 
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let assistantText = ''
+      const data = await res.json()
 
-      const updateAssistantMessage = (body: string) => {
-        setMessages((current) =>
-          current.map((entry) =>
-            entry.id === assistantMessageId ? { ...entry, body } : entry,
-          ),
-        )
-      }
+      setDraft((current) => ({
+        ...current,
+        ...normalizeResponseFormValues(data, current),
+      }))
 
-      const mergeDrafts = (current: InteractionDraft, next: Partial<InteractionDraft>, isFollowUp?: boolean) => {
-        const merged: InteractionDraft = { ...current }
-        Object.keys(next).forEach((key) => {
-          const k = key as keyof InteractionDraft
-          const val = next[k]
-          if (k === 'attendees' && typeof val === 'string' && val.trim()) {
-            const incoming = val.split(',').map((s) => s.trim()).filter(Boolean)
-            const existing = (current.attendees || '').split(',').map((s) => s.trim()).filter(Boolean)
-            const combined = Array.from(new Set([...existing, ...incoming]))
-            merged.attendees = combined.join(', ')
-            return
-          }
+      setMessages((current) =>
+        current.map((entry) =>
+          entry.id === assistantMessageId
+            ? {
+                ...entry,
+                body:
+                  data?.response ||
+                  'I filled the form with the details I could extract from your note.',
+              }
+            : entry,
+        ),
+      )
 
-          // When this is a follow-up-only update, avoid overwriting longer text fields like topics/materials
-          if (isFollowUp && (k === 'topics_discussed' || k === 'materials_shared' || k === 'samples_distributed')) {
-            return
-          }
-
-          if (val !== undefined) {
-            merged[k] = val as any
-          }
-        })
-
-        // Defensive: if this is a follow-up-only update, ensure we never overwrite long text fields
-        if (isFollowUp) {
-          merged.topics_discussed = current.topics_discussed
-          merged.materials_shared = current.materials_shared
-          merged.samples_distributed = current.samples_distributed
-        }
-
-        return merged
-      }
-
-      const processEvent = (event: StreamEvent) => {
-        if (event.type === 'delta') {
-          assistantText += event.content
-          updateAssistantMessage(assistantText)
-          return
-        }
-
-        const nextDraft = normalizeExtraction(event.payload)
-        const isFollowUp = !!event.payload?.is_follow_up_only
-        setDraft((current) => mergeDrafts(current, nextDraft, isFollowUp))
-
-        if (!assistantText && event.payload?.assistant_response) {
-          assistantText = event.payload.assistant_response
-          updateAssistantMessage(assistantText)
-        }
-
-        setStatus('Fields auto-filled from your note.')
-      }
-
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) {
-          break
-        }
-
-        buffer += decoder.decode(value, { stream: true })
-
-        let newlineIndex = buffer.indexOf('\n')
-        while (newlineIndex >= 0) {
-          const line = buffer.slice(0, newlineIndex).trim()
-          buffer = buffer.slice(newlineIndex + 1)
-
-          if (line) {
-            processEvent(JSON.parse(line) as StreamEvent)
-          }
-
-          newlineIndex = buffer.indexOf('\n')
-        }
-      }
-
-      const trailingLine = buffer.trim()
-      if (trailingLine) {
-        processEvent(JSON.parse(trailingLine) as StreamEvent)
-      }
+      setStatus('Fields auto-filled from your note.')
     } catch (err) {
-      try {
-        const fallbackRes = await fetch('/api/v1/ai/chat', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: 'local', message: message.trim() }),
-        })
-        const data = await fallbackRes.json()
-        const nextDraft = normalizeExtraction(data)
-        const isFollowUp = !!data?.is_follow_up_only
-        setDraft((current) => mergeDrafts(current, nextDraft, isFollowUp))
-        setMessages((current) =>
-          current.map((entry) =>
-            entry.id === assistantMessageId
-              ? {
-                  ...entry,
-                  body:
-                    data?.assistant_response ||
-                    `I filled ${Object.values(nextDraft).filter(Boolean).length} fields from your note. Review the form on the left before saving.`,
-                }
-              : entry,
-          ),
-        )
-        setStatus('Fields auto-filled from your note.')
-      } catch (fallbackErr) {
-        setStatus('AI request failed')
-      }
+      setStatus('AI request failed')
     }
     finally {
       setMessage('')
