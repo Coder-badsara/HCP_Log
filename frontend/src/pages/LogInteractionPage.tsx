@@ -8,6 +8,73 @@ type AiMessage = {
   body: string
 }
 
+type MessageBubbleProps = {
+  entry: AiMessage
+  index: number
+  isPendingAssistant?: boolean
+}
+
+function RobotIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M9 4.5h6A2.5 2.5 0 0 1 17.5 7v1H19a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-1.5v1A2.5 2.5 0 0 1 15 20.5H9A2.5 2.5 0 0 1 6.5 18v-1H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h1.5V7A2.5 2.5 0 0 1 9 4.5Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path d="M9.5 8.5h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="9" cy="12" r="1.1" fill="currentColor" />
+      <circle cx="15" cy="12" r="1.1" fill="currentColor" />
+      <path d="M9 15.5c.9.7 1.8 1 3 1s2.1-.3 3-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M12 2.5v1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="12" cy="2.2" r="0.9" fill="currentColor" />
+    </svg>
+  )
+}
+
+function ThinkingDots() {
+  return (
+    <span className="thinking-dots" aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </span>
+  )
+}
+
+function MessageBubble({ entry, index, isPendingAssistant = false }: MessageBubbleProps) {
+  const isAssistant = entry.role === 'assistant'
+
+  return (
+    <div
+      key={entry.id ?? `${entry.role}-${index}`}
+      className={`rounded-2xl border px-4 py-3 text-sm shadow-sm ${
+        isAssistant
+          ? 'border-sky-100/80 bg-gradient-to-br from-white to-sky-50/70 text-slate-700 shadow-[0_8px_24px_rgba(14,116,144,0.08)]'
+          : 'ml-auto max-w-[90%] border-transparent bg-gradient-to-br from-slate-950 to-slate-800 text-white shadow-[0_12px_30px_rgba(15,23,42,0.28)]'
+      }`}
+    >
+      <p className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] ${isAssistant ? 'text-sky-700' : 'text-sky-200'}`}>
+        {entry.title}
+      </p>
+
+      {isPendingAssistant ? (
+        <div className="flex items-start gap-3">
+          <div className="robot-badge mt-0.5">
+            <RobotIcon className="h-4 w-4" />
+          </div>
+          <div className="flex min-h-[1.75rem] items-center gap-2 text-slate-500">
+            <ThinkingDots />
+            <span>Thinking</span>
+          </div>
+        </div>
+      ) : (
+        <p className="whitespace-pre-line leading-7">{entry.body}</p>
+      )}
+    </div>
+  )
+}
+
 const today = new Date().toISOString().split('T')[0]
 const introMessageId = 'assistant-intro'
 const interactionTypeOptions = ['meeting', 'detail_visit', 'call', 'follow_up'] as const
@@ -75,6 +142,7 @@ export default function LogInteractionPage() {
   const [draft, setDraft] = useState<InteractionDraft>(emptyDraft)
   const [message, setMessage] = useState('')
   const [savedInteractionId, setSavedInteractionId] = useState<number | null>(null)
+  const [pendingAssistantMessageId, setPendingAssistantMessageId] = useState<string | null>(null)
   const [messages, setMessages] = useState<AiMessage[]>([
     {
       id: introMessageId,
@@ -121,6 +189,7 @@ export default function LogInteractionPage() {
         },
       ]
     })
+    setPendingAssistantMessageId(assistantMessageId)
 
     try {
       const res = await fetch('/api/v1/ai/chat', {
@@ -157,13 +226,14 @@ export default function LogInteractionPage() {
         ),
       )
 
-      setStatus('Fields auto-filled from your note.')
+      setStatus('Fields are auto filled by AI Assistant.')
     } catch (err) {
       setStatus('AI request failed')
     }
     finally {
       setMessage('')
       setIsStreaming(false)
+      setPendingAssistantMessageId(null)
     }
   }
 
@@ -242,8 +312,8 @@ export default function LogInteractionPage() {
           <aside className="self-start xl:sticky xl:top-4 flex h-[min(760px,calc(100vh-2rem))] w-full flex-col overflow-hidden rounded-[28px] border border-slate-200 bg-[#f8fbff]/95 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur">
             <div className="border-b border-slate-200 px-5 py-4">
               <div className="flex items-center gap-3">
-                <div className="grid h-10 w-10 place-items-center rounded-2xl bg-sky-600 text-sm font-semibold text-white shadow-lg shadow-sky-200">
-                  AI
+                <div className="robot-badge h-10 w-10 text-sky-700">
+                  <RobotIcon className="h-5 w-5" />
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-slate-900">AI Assistant</p>
@@ -254,22 +324,22 @@ export default function LogInteractionPage() {
 
             <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
               {messages.map((entry, index) => (
-                <div
+                <MessageBubble
                   key={entry.id ?? `${entry.role}-${index}`}
-                  className={`rounded-2xl border px-4 py-3 text-sm shadow-sm ${
-                    entry.role === 'assistant'
-                      ? 'border-sky-100/80 bg-gradient-to-br from-white to-sky-50/70 text-slate-700 shadow-[0_8px_24px_rgba(14,116,144,0.08)]'
-                      : 'ml-auto max-w-[90%] border-transparent bg-gradient-to-br from-slate-950 to-slate-800 text-white shadow-[0_12px_30px_rgba(15,23,42,0.28)]'
-                  }`}
-                >
-                  <p className={`mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] ${entry.role === 'assistant' ? 'text-sky-700' : 'text-sky-200'}`}>
-                    {entry.title}
-                  </p>
-                  <p className="whitespace-pre-line leading-7">{entry.body}</p>
-                </div>
+                  entry={entry}
+                  index={index}
+                  isPendingAssistant={entry.id === pendingAssistantMessageId && isStreaming}
+                />
               ))}
 
-              {status ? <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{status}</div> : null}
+              {status ? (
+                <div className="status-card flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm">
+                  <div className="robot-badge text-sky-700">
+                    <RobotIcon className="h-4 w-4" />
+                  </div>
+                  <span>{status}</span>
+                </div>
+              ) : null}
               <div ref={chatEndRef} />
             </div>
 
@@ -288,7 +358,7 @@ export default function LogInteractionPage() {
                   disabled={isStreaming}
                   type="button"
                 >
-                  {isStreaming ? 'Streaming...' : 'Log'}
+                  {isStreaming ? 'Thinking...' : 'Log'}
                 </button>
               </div>
             </div>
