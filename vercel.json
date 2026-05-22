@@ -9,7 +9,7 @@
       "root": "backend",
       "routePrefix": "/api",
       "framework": "fastapi",
-      "entrypoint": "main.py"
+      "entrypoint": "app/main.py"
     }
   }
 }
