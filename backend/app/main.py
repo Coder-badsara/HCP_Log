@@ -66,12 +66,12 @@ async def on_startup():
     await init_db()
 
 
-@app.get('/api/v1/health')
+@app.get('/v1/health')
 async def health_check():
     return {'status': 'ok', 'database_configured': AsyncSessionLocal is not None}
 
 
-@app.post('/api/v1/interactions')
+@app.post('/v1/interactions')
 async def create_interaction(payload: InteractionIn, db: AsyncSession = Depends(get_db)):
     try:
         # parse date (expecting ISO date)
@@ -112,7 +112,7 @@ async def create_interaction(payload: InteractionIn, db: AsyncSession = Depends(
     }}
 
 
-@app.patch('/api/v1/interactions/{interaction_id}')
+@app.patch('/v1/interactions/{interaction_id}')
 async def update_interaction(interaction_id: int, payload: InteractionUpdateIn, db: AsyncSession = Depends(get_db)):
     interaction = await db.get(Interaction, interaction_id)
     if interaction is None:

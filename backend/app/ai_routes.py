@@ -26,14 +26,14 @@ class ConfirmIn(BaseModel):
     confirmed_data: dict
 
 
-@router.post('/api/v1/ai/chat')
+@router.post('/v1/ai/chat')
 async def ai_chat(payload: AIChatIn):
     # Call LLM or fallback extraction
     result = await extract_entities_from_text(payload.message, payload.current_form_values)
     return result
 
 
-@router.post('/api/v1/ai/chat/stream')
+@router.post('/v1/ai/chat/stream')
 async def ai_chat_stream(payload: AIChatIn):
     async def event_stream() -> AsyncGenerator[str, None]:
         assistant_text = ''
@@ -59,7 +59,7 @@ async def ai_chat_stream(payload: AIChatIn):
     )
 
 
-@router.post('/api/v1/ai/confirm')
+@router.post('/v1/ai/confirm')
 async def ai_confirm(body: ConfirmIn, db: AsyncSession = Depends(get_db)):
     if not body.human_confirmed:
         raise HTTPException(status_code=400, detail='Human confirmation required to save')
