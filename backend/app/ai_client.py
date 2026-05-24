@@ -110,6 +110,45 @@ def _extract_sentiment(text: str) -> str:
     return 'neutral'
 
 
+def _extract_time(text: str) -> str:
+    lowered = text.lower()
+
+    patterns = [
+        r'\b(?:at|around|by|after|before|@)\s*(\d{1,2})(?::|\.)(\d{2})\s*(am|pm)?\b',
+        r'\b(?:at|around|by|after|before|@)\s*(\d{1,2})\s*(am|pm)\b',
+        r'\b(\d{1,2})(?::|\.)(\d{2})\s*(am|pm)?\b',
+        r'\b(\d{1,2})\s*(am|pm)\b',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, lowered, re.IGNORECASE)
+        if not match:
+            continue
+
+        groups = match.groups()
+        hour = int(groups[0])
+        minute = 0
+        meridiem = None
+
+        if len(groups) >= 2 and groups[1] and groups[1].isdigit():
+            minute = int(groups[1])
+            meridiem = groups[2] if len(groups) > 2 else None
+        elif len(groups) >= 2:
+            meridiem = groups[1]
+
+        if meridiem:
+            meridiem = meridiem.lower()
+            if meridiem == 'pm' and hour < 12:
+                hour += 12
+            if meridiem == 'am' and hour == 12:
+                hour = 0
+
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return f'{hour:02d}:{minute:02d}'
+
+    return ''
+
+
 def _extract_interaction_type(text: str) -> str | None:
     lowered = text.lower()
     # Prefer explicit labels first
@@ -364,6 +403,11 @@ def _extract_interaction_data(text: str) -> dict:
 
     # avoid setting sentiment on short follow-up-only notes so we don't overwrite prior sentiment
     sentiment_value = None if is_follow_up_only else _extract_sentiment(text)
+    explicit_time = _extract_time(text)
+    if is_follow_up_only:
+        extracted_time = None
+    else:
+        extracted_time = explicit_time or _format_now()
 
     next_steps = _build_next_steps(
         {
@@ -498,6 +542,7 @@ form_values keys:
 - interaction_type_index: number or null
 - date: string in YYYY-MM-DD or empty string
 - time: string in HH:MM 24-hour format or empty string
+- time: string in HH:MM 24-hour format or empty string
 - attendees: string
 - topics_discussed: string
 - materials_shared: string
@@ -510,6 +555,7 @@ Rules:
 - Only include values you can infer from the user note.
 - Use empty strings for missing text fields.
 - Use null for unknown dropdown indexes.
+- If the user note mentions a time, extract it into HH:MM.
 - Treat the existing form values below as previous data points.
 - If the new user note does not clearly change a field, keep the existing value.
 - If the new user note contradicts a previous value, update the field to match the new note.
