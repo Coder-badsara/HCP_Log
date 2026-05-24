@@ -149,6 +149,10 @@ def _extract_time(text: str) -> str:
     return ''
 
 
+def _has_explicit_time(text: str) -> bool:
+    return bool(_extract_time(text))
+
+
 def _extract_interaction_type(text: str) -> str | None:
     lowered = text.lower()
     # Prefer explicit labels first
@@ -348,7 +352,7 @@ def build_local_payload(text: str, assistant_response: str | None = None) -> dic
 def _extract_interaction_data(text: str) -> dict:
     lowered = text.lower()
     extracted_date = _format_today() if any(token in lowered for token in ['today', 'this morning', 'this afternoon', 'this evening']) else None
-    extracted_time = _format_now()
+    extracted_time = _extract_time(text) or _format_now()
     hcp_name = _extract_name(text)
 
     attendees = _extract_attendees(text)
@@ -542,7 +546,6 @@ form_values keys:
 - interaction_type_index: number or null
 - date: string in YYYY-MM-DD or empty string
 - time: string in HH:MM 24-hour format or empty string
-- time: string in HH:MM 24-hour format or empty string
 - attendees: string
 - topics_discussed: string
 - materials_shared: string
@@ -556,6 +559,7 @@ Rules:
 - Use empty strings for missing text fields.
 - Use null for unknown dropdown indexes.
 - If the user note mentions a time, extract it into HH:MM.
+- If the user note does not mention a time, keep the existing time value from the form.
 - Treat the existing form values below as previous data points.
 - If the new user note does not clearly change a field, keep the existing value.
 - If the new user note contradicts a previous value, update the field to match the new note.
@@ -616,6 +620,11 @@ User note:
         for key, value in normalized_form_values.items():
             if not _is_missing_value(value):
                 merged_form_values[key] = value
+
+        if not _has_explicit_time(text):
+            seeded_time = existing_form_values.get('time')
+            if not _is_missing_value(seeded_time):
+                merged_form_values['time'] = seeded_time
 
         for key, value in existing_form_values.items():
             if _is_missing_value(merged_form_values.get(key)) and not _is_missing_value(value):

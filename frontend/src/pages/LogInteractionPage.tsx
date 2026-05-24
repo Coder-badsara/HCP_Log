@@ -80,6 +80,10 @@ const introMessageId = 'assistant-intro'
 const interactionTypeOptions = ['meeting', 'detail_visit', 'call', 'follow_up'] as const
 const sentimentOptions = ['positive', 'neutral', 'negative'] as const
 
+function getCurrentTimeValue() {
+  return new Date().toTimeString().slice(0, 5)
+}
+
 const emptyDraft: InteractionDraft = {
   hcp_name: '',
   interaction_type: 'meeting',
@@ -191,6 +195,12 @@ export default function LogInteractionPage() {
     })
     setPendingAssistantMessageId(assistantMessageId)
 
+    const currentTimeValue = draft.time || getCurrentTimeValue()
+    const currentFormValues = {
+      ...draft,
+      time: currentTimeValue,
+    }
+
     try {
       const res = await fetch('/api/v1/ai/chat', {
         method: 'POST',
@@ -198,7 +208,7 @@ export default function LogInteractionPage() {
         body: JSON.stringify({
           session_id: 'local',
           message: message.trim(),
-          current_form_values: draft,
+          current_form_values: currentFormValues,
         }),
       })
 
