@@ -114,6 +114,18 @@ function normalizeOptionValue(value: unknown, options: readonly string[], fallba
   return fallback
 }
 
+function parseMaybeJson(rawText: string) {
+  if (!rawText) {
+    return {}
+  }
+
+  try {
+    return JSON.parse(rawText)
+  } catch {
+    return { detail: rawText }
+  }
+}
+
 function normalizeResponseFormValues(payload: any, current: InteractionDraft): Partial<InteractionDraft> {
   const extracted = payload?.form_values ?? payload?.extracted_data ?? payload?.extracted ?? payload ?? {}
 
@@ -262,9 +274,10 @@ export default function LogInteractionPage() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(draft),
       })
-      const data = await res.json()
+      const rawText = await res.text()
+      const data = parseMaybeJson(rawText)
       if (!res.ok) {
-        const detail = typeof data?.detail === 'string' ? data.detail : 'Save failed'
+        const detail = typeof data?.detail === 'string' ? data.detail : rawText || 'Save failed'
         throw new Error(detail)
       }
       const nextId = data.id ?? data.interaction_id ?? savedInteractionId
