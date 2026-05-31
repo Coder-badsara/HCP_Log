@@ -16,7 +16,7 @@ DATABASE_URL = os.getenv(
 
 if not DATABASE_URL:
     # Local default so interaction saving works without a MySQL setup.
-    DATABASE_URL = "sqlite+aiosqlite:///./aivoa.db"
+    DATABASE_URL = "sqlite+aiosqlite:///./hcpdatabase.db"
 
 Base = declarative_base()
 

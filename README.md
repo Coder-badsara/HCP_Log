@@ -44,7 +44,7 @@ npm run dev
 
 Development notes
  - The Vite dev server proxies `/api/*` to the backend (see frontend/vite config).
- - Backend uses async SQLAlchemy; if `DATABASE_URL` is not set it will fall back to `sqlite+aiosqlite:///./aivoa.db`.
+ - Backend uses async SQLAlchemy; if `DATABASE_URL` is not set it will fall back to `sqlite+aiosqlite:///./hcpdatabase.db`.
 
 Configuration / Environment
  - `DATABASE_URL` — SQLAlchemy URL (e.g. `mysql+aiomysql://user:pw@host:3306/dbname`).
